@@ -45,16 +45,22 @@ def extract_fields_and_metrics(breakdown_columns:list[str], config_file: Path) -
 
     return fields
 
-class ReportCampaignDateStream(RedditAdsStream):
-    """Define Report report broken down by Campaign and Date."""
-    name = "reports"
-    path = "/reports"
-    primary_keys = ["date", "campaign_id"]
-    replication_key = "metrics_updated_at" # change to incremental
-    schema_filepath = SCHEMAS_DIR / "report_by_campaign_date.json"
-    rest_method = "POST"
+class _ReportStream(RedditAdsStream):
+    """Shared base for Reddit's /reports endpoint at different breakdowns.
 
+    Reddit's /reports endpoint accepts a `breakdowns` list that controls the
+    grain of the returned rows (e.g. campaign+date vs. ad+date). Subclasses
+    only need to set `breakdown_columns`, `primary_keys`, and
+    `schema_filepath` to point at a new grain.
+    """
+
+    path = "/reports"
+    replication_key = "metrics_updated_at"
+    rest_method = "POST"
     records_jsonpath = "$.data.metrics[*]"
+
+    # Subclasses override this to control the /reports breakdown grain.
+    breakdown_columns: t.ClassVar[list[str]] = []
 
     def prepare_request_payload(
         self,
@@ -77,10 +83,8 @@ class ReportCampaignDateStream(RedditAdsStream):
         rounded_hour = now.replace(minute=0, second=0, microsecond=0)
         end_date = rounded_hour.strftime('%Y-%m-%dT%H:00:00Z')
 
-        breakdown_columns = ["campaign_id", "date"]
+        fields = extract_fields_and_metrics(self.breakdown_columns, self.schema_filepath)
 
-        fields = extract_fields_and_metrics(breakdown_columns, self.schema_filepath)
-        
         timestamp = self.get_starting_replication_key_value(context)
         # Metrics may take up to 6 hours to stabilize.
 
@@ -89,7 +93,7 @@ class ReportCampaignDateStream(RedditAdsStream):
 
         payload = {
             "data": {
-                "breakdowns": breakdown_columns,
+                "breakdowns": self.breakdown_columns,
                 "fields": fields,
                 "starts_at": start_date,
                 "ends_at": end_date,
@@ -107,6 +111,22 @@ class ReportCampaignDateStream(RedditAdsStream):
             record["metrics_updated_at"] = updated_at
             yield record
 
+
+class ReportCampaignDateStream(_ReportStream):
+    """Define Report report broken down by Campaign and Date."""
+    name = "reports"
+    primary_keys = ["date", "campaign_id"]
+    schema_filepath = SCHEMAS_DIR / "report_by_campaign_date.json"
+    breakdown_columns: t.ClassVar[list[str]] = ["campaign_id", "date"]
+
+
+class ReportAdDateStream(_ReportStream):
+    """Define Report report broken down by Ad and Date."""
+    name = "reports_by_ad"
+    primary_keys = ["date", "ad_id"]
+    schema_filepath = SCHEMAS_DIR / "report_by_ad_date.json"
+    breakdown_columns: t.ClassVar[list[str]] = ["ad_id", "date"]
+
 class CampaignsStream(RedditAdsStream):
     """Define Campaigns stream."""
     name = "campaigns"
@@ -115,6 +135,32 @@ class CampaignsStream(RedditAdsStream):
     rest_method = "GET"
     replication_key = "modified_at"
     schema_filepath = SCHEMAS_DIR / "campaigns.json"
+
+class AdGroupsStream(RedditAdsStream):
+    """Define Ad Groups stream."""
+    name = "ad_groups"
+    path = "/ad_groups"
+    primary_keys = ["id"]
+    rest_method = "GET"
+    replication_key = "modified_at"
+    schema_filepath = SCHEMAS_DIR / "ad_groups.json"
+
+class AdAccountStream(RedditAdsStream):
+    """Define Ad Account stream.
+
+    GET /ad_accounts/{account_id} returns the account's own record as a
+    single JSON object (not a paginated array), unlike every other stream
+    in this tap. `path=""` targets url_base directly (which already embeds
+    the account_id), and `records_jsonpath` matches the singular `data`
+    object rather than `data[*]`.
+    """
+    name = "ad_account"
+    path = ""
+    primary_keys = ["id"]
+    rest_method = "GET"
+    replication_key = "modified_at"
+    schema_filepath = SCHEMAS_DIR / "ad_account.json"
+    records_jsonpath = "$.data"
 
 class AdsStream(RedditAdsStream):
     """Define Ads stream."""

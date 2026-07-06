@@ -73,7 +73,10 @@ class TapRedditAds(Tap):
         return [
             streams.AdsStream(self),
             streams.CampaignsStream(self),
+            streams.AdGroupsStream(self),
+            streams.AdAccountStream(self),
             streams.ReportCampaignDateStream(self),
+            streams.ReportAdDateStream(self),
         ]
 
 
